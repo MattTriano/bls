@@ -87,7 +87,7 @@ def get_json_series(
         raise ValueError("Must use API key to retrieve more than 10 years")
 
     if startyear and endyear - startyear >= 20:
-        compiled_results: dict = collections.defaultdict(list)
+        compiled_results = collections.defaultdict(list)  # type: typing.Dict
         sub_start, sub_end = startyear, startyear + 19
         while True:
             for result in _get_json_subset(series, sub_start, sub_end, key):
