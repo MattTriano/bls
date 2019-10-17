@@ -2,12 +2,17 @@
 api.py: access the BLS api directly
 """
 
-from __future__ import (print_function, division, absolute_import,
-                        unicode_literals)
+from __future__ import (
+    print_function,
+    division,
+    absolute_import,
+    unicode_literals,
+)
 
 import collections
 import datetime
 import logging
+import typing
 
 
 import os
@@ -20,39 +25,48 @@ log = logging.getLogger(__name__)
 
 
 class _Key(object):
-
-    def __init__(self):
-        self.key = os.environ.get('BLS_API_KEY')
+    def __init__(self) -> None:
+        self.key = os.environ.get("BLS_API_KEY")
 
 
 _KEY = _Key()
 
 
-def set_api_key(key):
+def set_api_key(key: str) -> None:
     _KEY.key = key
 
 
-def unset_api_key():
+def unset_api_key() -> None:
     _KEY.key = None
 
 
-def _get_json_subset(series, startyear, endyear, key):
+def _get_json_subset(
+    series: typing.Sequence[str],
+    startyear: int,
+    endyear: int,
+    key: typing.Optional[str],
+) -> typing.List[dict]:
     data = {
-        "seriesid": ','.join(series),
+        "seriesid": ",".join(series),
         "startyear": startyear,
-        "endyear": endyear
+        "endyear": endyear,
     }
     if key is not None:
-        data['registrationkey'] = key
+        data["registrationkey"] = key
     response = requests.post(BASE_URL, data=data).json()
-    for message in response['message']:
+    for message in response["message"]:
         log.warning(message)
-    if response['status'] != 'REQUEST_SUCCEEDED':
-        raise RuntimeError('Got status {}'.format(response['status']))
-    return response["Results"]['series']
+    if response["status"] != "REQUEST_SUCCEEDED":
+        raise RuntimeError("Got status {}".format(response["status"]))
+    return response["Results"]["series"]
 
 
-def get_json_series(series, startyear=None, endyear=None, key=None):
+def get_json_series(
+    series: typing.Union[str, typing.Sequence[str]],
+    startyear: typing.Optional[int] = None,
+    endyear: typing.Optional[int] = None,
+    key: typing.Optional[str] = None,
+) -> typing.List[dict]:
     if isinstance(series, str):
         series = [series]
     startyear = startyear if startyear is None else int(startyear)
@@ -70,62 +84,68 @@ def get_json_series(series, startyear=None, endyear=None, key=None):
         startyear = endyear - (9 if key is None else 19)
 
     if key is None and endyear - startyear >= 10:
-        raise ValueError('Must use API key to retrieve more than 10 years')
+        raise ValueError("Must use API key to retrieve more than 10 years")
 
     if startyear and endyear - startyear >= 20:
-        compiled_results = collections.defaultdict(list)
+        compiled_results: dict = collections.defaultdict(list)
         sub_start, sub_end = startyear, startyear + 19
         while True:
             for result in _get_json_subset(series, sub_start, sub_end, key):
-                compiled_results[result['seriesID']].extend(result['data'])
+                compiled_results[result["seriesID"]].extend(result["data"])
             sub_start, sub_end = sub_end + 1, min(sub_end + 20, endyear)
             if sub_start > endyear:
                 break
-        return [{'seriesID': i, 'data': j}
-                for i, j in compiled_results.items()]
+        return [
+            {"seriesID": i, "data": j} for i, j in compiled_results.items()
+        ]
     return _get_json_subset(series, startyear, endyear, key)
 
 
-def parse_series(series):
-    if not len(series['data']):
+def parse_series(series: dict) -> pd.Series:
+    if not len(series["data"]):
         raise ValueError(
-            'No data received for series {}! Are your parameters correct?'
-            .format(series['seriesID'])
+            (
+                "No data received for series {}! "
+                "Are your parameters correct?"
+            ).format(series["seriesID"])
         )
-    df = pd.DataFrame(series['data'])
-    freq = df['period'].iloc[0][0]
-    if freq == 'A':
+    df = pd.DataFrame(series["data"])
+    freq = df["period"].iloc[0][0]
+    if freq == "A":
         return (
-            df.assign(date=pd.to_datetime(df['year']))
-            .set_index('date')
-            .to_period(freq='A-JAN')
-            ['value']
+            df.assign(date=pd.to_datetime(df["year"]))
+            .set_index("date")
+            .to_period(freq="A-JAN")["value"]
         )
-    if freq == 'Q':
+    if freq == "Q":
         return (
-            df.assign(date=pd.to_datetime(
-                df['year']
-                .str.cat(df['period'].str.replace('Q0', 'Q'))
-            ))
-            .set_index('date')
-            .to_period(freq='Q')
-            ['value']
+            df.assign(
+                date=pd.to_datetime(
+                    df["year"].str.cat(df["period"].str.replace("Q0", "Q"))
+                )
+            )
+            .set_index("date")
+            .to_period(freq="Q")["value"]
         )
-    if freq == 'M':
+    if freq == "M":
         return (
-            df.assign(date=pd.to_datetime(
-                df['year']
-                .str.cat(df['period'].str.replace('M', '-'))
-            ))
-            [df['period'] != 'M13']
-            .set_index('date')
-            .to_period(freq='M')
-            ['value']
+            df.assign(
+                date=pd.to_datetime(
+                    df["year"].str.cat(df["period"].str.replace("M", "-"))
+                )
+            )[df["period"] != "M13"]
+            .set_index("date")
+            .to_period(freq="M")["value"]
         )
-    raise ValueError('Unknown period format: {}'.format(df['period'].iloc[0]))
+    raise ValueError("Unknown period format: {}".format(df["period"].iloc[0]))
 
 
-def get_series(series, startyear=None, endyear=None, key=None):
+def get_series(
+    series: typing.Union[str, typing.Sequence[str]],
+    startyear: typing.Optional[int] = None,
+    endyear: typing.Optional[int] = None,
+    key: typing.Optional[str] = None,
+) -> typing.Union[pd.Series, pd.DataFrame]:
     """
     Retrieve one or more series from BLS. Note that only ten years may be
     retrieved at a time
@@ -140,9 +160,8 @@ def get_series(series, startyear=None, endyear=None, key=None):
         Series object is returned instead of a DataFrame.
     """
     results = get_json_series(series, startyear, endyear, key)
-    df = pd.DataFrame({
-        result["seriesID"]: parse_series(result)
-        for result in results
-    })
+    df = pd.DataFrame(
+        {result["seriesID"]: parse_series(result) for result in results}
+    )
     df = df.applymap(float)
     return df[series].sort_index()
